@@ -1034,9 +1034,23 @@ def _run_command(
     env: Optional[Dict[str, str]] = None,
 ) -> Tuple[int, bytes, bytes]:
     logger.debug('Running %s', ' '.join(cmdargs))
-    cp = subprocess.run(cmdargs, input=stdin, env=env, capture_output=True, text=False)
-    logger.debug('Completed %s', repr(cp))
-    return cp.returncode, cp.stdout, cp.stderr
+    # Redirect stdout/stderr to real temporary files instead of capture_output
+    # pipes. gpg auto-starts daemon children (gpg-agent, scdaemon) that inherit
+    # the child's stdio FDs; with pipes, a lingering daemon holds the write end
+    # open and subprocess.run's pipe drain never sees EOF, so it blocks forever
+    # even after gpg itself has exited (revoked key, misconfigured smartcard,
+    # ...). Files sidestep the drain entirely and don't affect pinentry, which
+    # uses the controlling terminal rather than stdout.
+    with tempfile.TemporaryFile() as outf, tempfile.TemporaryFile() as errf:
+        cp = subprocess.run(
+            cmdargs, input=stdin, env=env, stdout=outf, stderr=errf, text=False
+        )
+        outf.seek(0)
+        errf.seek(0)
+        out = outf.read()
+        err = errf.read()
+    logger.debug('Completed %s (ecode=%d)', cmdargs[0], cp.returncode)
+    return cp.returncode, out, err
 
 
 def git_run_command(

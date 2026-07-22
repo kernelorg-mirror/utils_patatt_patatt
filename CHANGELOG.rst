@@ -32,7 +32,13 @@ Bug Fixes
   discarded all but the last value of a repeated key (e.g. multiple
   ``patatt.keyringsrc`` entries) instead of collecting them all.
 
-v0.7.1 (2026-04-10)
+- Fix a subprocess hang when signing or verifying with gpg. gpg spawns
+  daemon children (``gpg-agent``, ``scdaemon``) that inherit the captured
+  stdout/stderr pipes; a lingering daemon (from a revoked key or a
+  misconfigured smartcard) kept the pipe open so the read never reached
+  EOF and the call blocked forever, even after gpg itself had exited.
+  Redirect subprocess output through temporary files instead of pipes so
+  the call returns as soon as the command exits.
 -------------------
 
 Bug Fixes
