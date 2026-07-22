@@ -1,14 +1,13 @@
+from typing import Callable
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-from typing import Any, Callable
-from unittest.mock import patch, MagicMock
-
 from patatt import (
-    get_algo_keydata,
-    NoKeyError,
-    ConfigurationError,
     KEYCACHE,
     GitConfigType,
+    NoKeyError,
+    get_algo_keydata,
 )
 
 
@@ -42,7 +41,10 @@ class TestGetAlgoKeydataSSHSigningKey:
     def test_ssh_format_uses_openssh(self, mock_gcfg: MagicMock) -> None:
         """When gpg.format=ssh, user.signingkey should get the openssh: prefix."""
         mock_gcfg.side_effect = _make_mock_get_config(
-            usercfg={'email': 'test@example.com', 'signingkey': '/home/user/.ssh/id_ed25519.pub'},
+            usercfg={
+                'email': 'test@example.com',
+                'signingkey': '/home/user/.ssh/id_ed25519.pub',
+            },
             gpgcfg={'format': 'ssh'},
         )
         config: GitConfigType = {'identity': 'test@example.com'}
@@ -92,7 +94,9 @@ class TestGetAlgoKeydataSSHSigningKey:
             get_algo_keydata(config)
 
     @patch('patatt.get_config_from_git')
-    def test_patatt_signingkey_skips_user_signingkey(self, mock_gcfg: MagicMock) -> None:
+    def test_patatt_signingkey_skips_user_signingkey(
+        self, mock_gcfg: MagicMock
+    ) -> None:
         """When patatt.signingkey is already set, user.signingkey is not consulted."""
         mock_gcfg.side_effect = _make_mock_get_config(
             usercfg={'email': 'test@example.com', 'signingkey': 'SHOULD_NOT_BE_USED'},
@@ -115,7 +119,7 @@ class TestGetAlgoKeydataSSHSigningKey:
             gpgcfg={'format': 'ssh'},
         )
         config: GitConfigType = {}
-        algo, keydata = get_algo_keydata(config)
+        algo, _keydata = get_algo_keydata(config)
 
         assert config['identity'] == 'auto@example.com'
         assert algo == 'openssh'

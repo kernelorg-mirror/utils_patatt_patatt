@@ -1,14 +1,13 @@
-import pytest
 import base64
 import hashlib
 from io import BytesIO
 
-from typing import Dict
+import pytest
 
-from patatt import DevsigHeader, ValidationError, SigningError
+from patatt import DevsigHeader
+
 
 class TestDevsigHeader:
-
     def test_initialization(self) -> None:
         """Test that DevsigHeader initializes correctly."""
         header = DevsigHeader()
@@ -17,7 +16,9 @@ class TestDevsigHeader:
 
     def test_from_bytes(self) -> None:
         """Test parsing a header from bytes."""
-        header_bytes = b'v=1; a=ed25519-sha256; t=1623456789; i=test@example.com; bh=abcd1234'
+        header_bytes = (
+            b'v=1; a=ed25519-sha256; t=1623456789; i=test@example.com; bh=abcd1234'
+        )
         header = DevsigHeader(header_bytes)
 
         assert header.get_field_as_str('v') == '1'
@@ -41,7 +42,7 @@ class TestDevsigHeader:
     def test_set_body(self) -> None:
         """Test setting the body and calculating the body hash."""
         header = DevsigHeader()
-        body = b"This is a test body"
+        body = b'This is a test body'
 
         header.set_body(body)
 
@@ -55,7 +56,7 @@ class TestDevsigHeader:
     def test_set_body_with_maxlen(self) -> None:
         """Test setting the body with a maxlen parameter."""
         header = DevsigHeader()
-        body = b"This is a test body"
+        body = b'This is a test body'
         maxlen = 10
 
         header.set_body(body, maxlen=maxlen)
@@ -95,17 +96,17 @@ class TestDevsigHeader:
         """Test that sanity_check fails if required fields are not set."""
         header = DevsigHeader()
 
-        with pytest.raises(RuntimeError, match="Must set \"a\" field first"):
+        with pytest.raises(RuntimeError, match='Must set "a" field first'):
             header.sanity_check()
 
         header.set_field('a', 'ed25519-sha256')
 
-        with pytest.raises(RuntimeError, match="Must use set_body first"):
+        with pytest.raises(RuntimeError, match='Must use set_body first'):
             header.sanity_check()
 
-        header.set_body(b"Test body")
+        header.set_body(b'Test body')
 
-        with pytest.raises(RuntimeError, match="Must use set_headers first"):
+        with pytest.raises(RuntimeError, match='Must use set_headers first'):
             header.sanity_check()
 
     # @pytest.mark.skipif(True, reason="Requires actual ed25519 keys")

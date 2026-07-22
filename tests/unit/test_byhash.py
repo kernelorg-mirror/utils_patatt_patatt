@@ -4,11 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from patatt import make_byhash_path, make_pkey_path, get_public_key
+from patatt import get_public_key, make_byhash_path, make_pkey_path
 
 
 class TestMakeByhashPath:
-
     def test_basic_hash_computation(self) -> None:
         """Test that make_byhash_path computes the correct hash."""
         keytype = 'openssh'
@@ -42,7 +41,6 @@ class TestMakeByhashPath:
 
 
 class TestGetPublicKeyByHash:
-
     def test_filesystem_byhash_lookup(self) -> None:
         """Test that get_public_key finds a key via by-hash fallback."""
         with tempfile.TemporaryDirectory() as tmpdir:

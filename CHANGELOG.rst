@@ -1,6 +1,33 @@
 Changelog
 =========
 
+v0.8-dev (unreleased)
+---------------------
+
+Improvements
+~~~~~~~~~~~~
+
+- Add ``ci.sh`` to run the full local gate suite in order (``uv sync``,
+  ``ruff format``, ``ruff check``, ``ty``, ``mypy``, ``pyright``, and
+  ``pytest``), each with its own exit code for easy diagnosis.
+
+- Add ``ci-matrix.sh`` to run an import smoke check and the test suite
+  across every supported interpreter (Python 3.9 through 3.13), pulling
+  any missing interpreters via uv.
+
+- Adopt ``ruff format`` (single-quote style) and expand the ``ruff check``
+  lint ruleset for consistent formatting and stricter linting.
+
+- Add ``ty`` and ``pyright`` (strict mode) as type-checking gates alongside
+  ``mypy --strict`` with ``warn_unreachable`` enabled.
+
+Bug Fixes
+~~~~~~~~~
+
+- Fix ``patatt.gpg-bin`` configuration handling in ``set_bin_paths()``,
+  which asserted on the wrong variable and could never apply a configured
+  gpg binary path.
+
 v0.7.1 (2026-04-10)
 -------------------
 

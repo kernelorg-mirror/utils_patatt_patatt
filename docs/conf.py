@@ -14,8 +14,9 @@ project = 'patatt'
 copyright = '2021-2026, Konstantin Ryabitsev'
 author = 'Konstantin Ryabitsev'
 
-# The version info
-from patatt import __VERSION__
+# The version info (imported after sys.path is set up above)
+from patatt import __VERSION__  # noqa: E402
+
 version = __VERSION__
 release = __VERSION__
 
