@@ -28,6 +28,10 @@ Bug Fixes
   which asserted on the wrong variable and could never apply a configured
   gpg binary path.
 
+- Fix multi-value config handling in ``get_config_from_git()``, which
+  discarded all but the last value of a repeated key (e.g. multiple
+  ``patatt.keyringsrc`` entries) instead of collecting them all.
+
 v0.7.1 (2026-04-10)
 -------------------
 

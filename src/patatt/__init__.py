@@ -1096,7 +1096,9 @@ def get_config_from_git(
 
             if cfgkey in multivals:
                 curval = gitconfig.get(cfgkey)
-                if isinstance(curval, str):
+                if isinstance(curval, list):
+                    newval = list(curval)
+                elif isinstance(curval, str):
                     newval = [curval]
                 else:
                     newval = list()
