@@ -52,7 +52,7 @@ KEYCACHE: Dict[Union[str, bytes], Any] = dict()
 CONFIGCACHE: Dict[str, GitConfigType] = dict()
 
 # My version
-__VERSION__ = '0.8-dev'
+__VERSION__ = '0.8.0'
 MAX_SUPPORTED_FORMAT_VERSION = 1
 
 

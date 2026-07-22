@@ -1,8 +1,8 @@
 Changelog
 =========
 
-v0.8-dev (unreleased)
----------------------
+v0.8.0 (2026-07-22)
+-------------------
 
 Improvements
 ~~~~~~~~~~~~
@@ -39,6 +39,8 @@ Bug Fixes
   EOF and the call blocked forever, even after gpg itself had exited.
   Redirect subprocess output through temporary files instead of pipes so
   the call returns as soon as the command exits.
+
+v0.7.1 (2026-04-10)
 -------------------
 
 Bug Fixes
