@@ -1275,7 +1275,7 @@ def set_bin_paths(config: Optional[GitConfigType]) -> Tuple[str, str]:
     if GPGBIN is None:
         if config and config.get('gpg-bin'):
             _gpgbin = config.get('gpg-bin')
-            assert isinstance(GPGBIN, str), 'gpg-bin must be a string'
+            assert isinstance(_gpgbin, str), 'gpg-bin must be a string'
             GPGBIN = _gpgbin
         elif (_gpgbin := get_config_from_git(r'gpg\..*').get('program')) is not None:
             assert isinstance(_gpgbin, str), 'gpg program must be a string'
