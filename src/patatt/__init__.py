@@ -1037,8 +1037,8 @@ def get_data_dir() -> Path:
     Returns:
         Path to $XDG_DATA_HOME/patatt or ~/.local/share/patatt.
     """
-    if 'XDG_DATA_HOME' in os.environ:
-        datahome = Path(os.environ['XDG_DATA_HOME'])
+    if (xdg_data_home := os.environ.get('XDG_DATA_HOME')) is not None:
+        datahome = Path(xdg_data_home)
     else:
         datahome = Path.home() / '.local' / 'share'
     datadir = datahome / 'patatt'
@@ -1454,8 +1454,7 @@ def get_algo_keydata(config: GitConfigType) -> tuple[str, str]:
             f'Identity must be a string, got {type(identity).__name__}'
         )
 
-    if identity in KEYCACHE:
-        cached = KEYCACHE[identity]
+    if (cached := KEYCACHE.get(identity)) is not None:
         assert isinstance(cached, tuple)
         algo, keydata = cached
         assert isinstance(algo, str)
