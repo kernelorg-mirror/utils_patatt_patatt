@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import threading
 import time
-from typing import List, Tuple
 
 from patatt import _run_command
 
@@ -26,7 +27,7 @@ def test_run_command_does_not_wait_for_lingering_child() -> None:
     Runs the call in a daemon thread so a regression surfaces as a prompt
     assertion failure at RETURN_DEADLINE rather than hanging the test suite.
     """
-    holder: List[Tuple[int, bytes, bytes]] = []
+    holder: list[tuple[int, bytes, bytes]] = []
 
     def target() -> None:
         holder.append(_run_command(LINGER_CMD))
