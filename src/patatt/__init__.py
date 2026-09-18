@@ -23,10 +23,11 @@ import urllib.parse
 import warnings
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
-if TYPE_CHECKING:
-    from nacl.signing import SigningKey
+from nacl.encoding import Base64Encoder
+from nacl.exceptions import BadSignatureError
+from nacl.signing import SigningKey, VerifyKey
 
 GitConfigType = Dict[str, Union[str, List[str]]]
 AttestationResult = Tuple[
@@ -455,12 +456,6 @@ class DevsigHeader:
 
     @staticmethod
     def _sign_ed25519(payload: bytes, privkey: bytes) -> tuple[bytes, bytes]:
-        try:
-            from nacl.encoding import Base64Encoder
-            from nacl.signing import SigningKey
-        except ModuleNotFoundError as ex:
-            raise RuntimeError('This operation requires PyNaCl libraries') from ex
-
         if privkey not in KEYCACHE:
             sk = SigningKey(privkey, encoder=Base64Encoder)
             vk = base64.b64encode(sk.verify_key.encode())
@@ -479,13 +474,6 @@ class DevsigHeader:
 
     @staticmethod
     def _validate_ed25519(sigdata: bytes, pubkey: bytes) -> bytes:
-        try:
-            from nacl.encoding import Base64Encoder
-            from nacl.exceptions import BadSignatureError
-            from nacl.signing import VerifyKey
-        except ModuleNotFoundError as ex:
-            raise RuntimeError('This operation requires PyNaCl libraries') from ex
-
         vk = VerifyKey(pubkey, encoder=Base64Encoder)
         try:
             return vk.verify(sigdata, encoder=Base64Encoder)
@@ -1769,11 +1757,6 @@ def cmd_validate(cmdargs: argparse.Namespace, config: GitConfigType) -> None:
 
 
 def cmd_genkey(cmdargs: argparse.Namespace, config: GitConfigType) -> None:
-    try:
-        from nacl.signing import SigningKey
-    except ModuleNotFoundError as ex:
-        raise RuntimeError('This operation requires PyNaCl libraries') from ex
-
     # Do we have the signingkey defined?
     usercfg = get_config_from_git(r'user\..*')
     if not config.get('identity'):

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Generator
 
 import pytest
+from nacl.signing import SigningKey
 
 from patatt import DevsigHeader, PatattMessage
 
@@ -51,11 +52,6 @@ def patatt_message(sample_email_bytes: bytes) -> PatattMessage:
 @pytest.fixture
 def sample_ed25519_key_pair() -> dict[str, bytes]:
     """Generate a sample ed25519 key pair for testing."""
-    try:
-        from nacl.signing import SigningKey
-    except ImportError:
-        pytest.skip('PyNaCl not installed, skipping ed25519 tests')
-
     # Generate a key pair
     private_key = SigningKey.generate()
     public_key = private_key.verify_key
