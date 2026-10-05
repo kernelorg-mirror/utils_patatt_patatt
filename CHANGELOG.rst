@@ -4,6 +4,13 @@ Changelog
 v0.8.1-dev (unreleased)
 -----------------------
 
+Improvements
+~~~~~~~~~~~~
+
+- Raise the minimum supported Python version to 3.9. Python 3.8 reached
+  end of life in October 2024, and ``ci-matrix.sh`` already tests only
+  3.9 and newer.
+
 Bug Fixes
 ~~~~~~~~~
 

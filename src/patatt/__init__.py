@@ -23,15 +23,15 @@ import urllib.parse
 import warnings
 from io import BytesIO
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Optional, Union
 
 from nacl.encoding import Base64Encoder
 from nacl.exceptions import BadSignatureError
 from nacl.signing import SigningKey, VerifyKey
 
-GitConfigType = Dict[str, Union[str, List[str]]]
-AttestationResult = Tuple[
-    int, Optional[str], Optional[str], Optional[str], Optional[str], List[str]
+GitConfigType = dict[str, Union[str, list[str]]]
+AttestationResult = tuple[
+    int, Optional[str], Optional[str], Optional[str], Optional[str], list[str]
 ]
 
 logger: logging.Logger = logging.getLogger(__name__)

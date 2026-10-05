@@ -11,7 +11,7 @@ authors = [
 ]
 license = {text = "MIT-0"}
 readme = "README.rst"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 keywords = ["git", "patches", "attestation", "email", "workflow"]
 classifiers = [
     "Intended Audience :: Developers",
@@ -101,7 +101,7 @@ warn_unreachable = true
 all = "error"
 # New in ty 0.0.52: flags every method that overrides a base-class method
 # without @override. Adopting it would require a typing_extensions dependency
-# for the 3.8 fallback (typing.override is 3.12+), which is too much weight
+# for the 3.9-3.11 fallback (typing.override is 3.12+), which is too much weight
 # for a style rule. Revisit if/when the supported Python floor moves to 3.12.
 missing-override-decorator = "ignore"
 
