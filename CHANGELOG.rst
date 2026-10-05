@@ -1,6 +1,16 @@
 Changelog
 =========
 
+v0.8.1-dev (unreleased)
+-----------------------
+
+Bug Fixes
+~~~~~~~~~
+
+- Fix bad OpenPGP signatures being reported as ``NOKEY`` ("no matching
+  openpgp key found") instead of ``BADSIG`` whenever gpg failed for any
+  reason other than a missing key, such as a corrupted ``b=`` value.
+
 v0.8.0 (2026-07-22)
 -------------------
 

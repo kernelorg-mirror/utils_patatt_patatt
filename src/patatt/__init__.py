@@ -628,7 +628,7 @@ class DevsigHeader:
             ecode, out, err = gpg_run_command(vrfyargs, stdin=bsigdata)
 
         if ecode > 0:
-            if err.find(b'[GNUPG:] NO_PUBKEY '):
+            if b'[GNUPG:] NO_PUBKEY ' in err:
                 raise NoKeyError('No matching key found')
             raise ValidationError('Failed to validate PGP signature')
 
