@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -9,7 +9,7 @@ description = "A simple library to add cryptographic attestation to patches sent
 authors = [
     {name = "Konstantin Ryabitsev", email = "mricon@kernel.org"},
 ]
-license = "MIT-0"
+license = {text = "MIT-0"}
 readme = "README.rst"
 requires-python = ">=3.8"
 keywords = ["git", "patches", "attestation", "email", "workflow"]
@@ -84,17 +84,13 @@ quote-style = "single"
 [tool.pyright]
 typeCheckingMode = "strict"
 
-# Overly strict rules.
+# GPGBIN and SSHKBIN are mutable settings despite their uppercase names.
+# b4 also assigns GPGBIN directly, so its public name must be preserved.
 reportConstantRedefinition = false
-reportUnknownArgumentType = false
-reportUnknownLambdaType = false
-reportUnknownMemberType = false
-reportUnknownVariableType = false
 
-# False positives caused by underscore-prefixed functions used across files.
-# Might be good to clean this up.
-reportPrivateUsage = false
-reportUnusedFunction = false
+executionEnvironments = [
+    { root = "tests", reportPrivateUsage = false },
+]
 
 # Configure mypy in strict mode
 [tool.mypy]

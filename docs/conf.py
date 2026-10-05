@@ -15,7 +15,7 @@ copyright = '2021-2026, Konstantin Ryabitsev'
 author = 'Konstantin Ryabitsev'
 
 # The version info (imported after sys.path is set up above)
-from patatt import __VERSION__  # noqa: E402
+from patatt import __VERSION__
 
 version = __VERSION__
 release = __VERSION__

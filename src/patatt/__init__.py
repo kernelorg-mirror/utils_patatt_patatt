@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
 #
 # Copyright (C) 2021-2026 by The Linux Foundation
 # SPDX-License-Identifier: MIT-0
 #
+from __future__ import annotations
+
 __author__ = 'Konstantin Ryabitsev <konstantin@linuxfoundation.org>'
 
 import argparse
@@ -22,15 +23,22 @@ import urllib.parse
 import warnings
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
+
+from nacl.encoding import Base64Encoder
+from nacl.exceptions import BadSignatureError
+from nacl.signing import SigningKey, VerifyKey
 
 GitConfigType = Dict[str, Union[str, List[str]]]
+AttestationResult = Tuple[
+    int, Optional[str], Optional[str], Optional[str], Optional[str], List[str]
+]
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 # Overridable via [patatt] parameters
-GPGBIN: Optional[str] = None
-SSHKBIN: Optional[str] = None
+GPGBIN: str | None = None
+SSHKBIN: str | None = None
 
 # Hardcoded defaults
 DEVSIG_HDR = b'X-Developer-Signature'
@@ -43,13 +51,16 @@ RES_NOKEY = 8
 RES_ERROR = 16
 RES_BADSIG = 32
 
-REQ_HDRS: List[bytes] = [b'from', b'subject']
-OPT_HDRS: List[bytes] = [b'message-id']
+REQ_HDRS: list[bytes] = [b'from', b'subject']
+OPT_HDRS: list[bytes] = [b'message-id']
 
 # Quick cache for key info
-KEYCACHE: Dict[Union[str, bytes], Any] = dict()
+KEYCACHE: dict[
+    str | bytes,
+    bytes | tuple[SigningKey, bytes] | tuple[str, str] | None,
+] = {}
 # Quick cache for config settings
-CONFIGCACHE: Dict[str, GitConfigType] = dict()
+CONFIGCACHE: dict[str, GitConfigType] = {}
 
 # My version
 __VERSION__ = '0.8.0'
@@ -64,16 +75,16 @@ class Error(Exception):
         errors: Optional list of detailed error messages.
     """
 
-    errors: Optional[List[str]]
+    errors: list[str] | None
 
-    def __init__(self, message: str, errors: Optional[List[str]] = None):
+    def __init__(self, message: str, errors: list[str] | None = None):
         super().__init__(message)
         self.errors = errors
 
     def __str__(self) -> str:
         s = super().__str__()
         if self.errors:
-            s = '%s: (%s)' % (s, ', '.join(self.errors))
+            s = '{}: ({})'.format(s, ', '.join(self.errors))
         return s
 
 
@@ -107,20 +118,20 @@ class DevsigHeader:
         hval: Optional raw header value to parse.
     """
 
-    _headervals: List[bytes]
-    _body_hash: Optional[bytes]
-    _order: List[str]
-    hval: Optional[bytes]
-    hdata: Dict[str, bytes]
+    _headervals: list[bytes]
+    _body_hash: bytes | None
+    _order: list[str]
+    hval: bytes | None
+    hdata: dict[str, bytes]
 
-    def __init__(self, hval: Optional[bytes] = None):
-        self._headervals = list()
+    def __init__(self, hval: bytes | None = None):
+        self._headervals = []
         self._body_hash = None
         # it doesn't need to be in any particular order,
         # but that's just anarchy, anarchy, I say!
         self._order = ['v', 'a', 't', 'l', 'i', 's', 'h', 'bh']
         self.hval = None
-        self.hdata = dict()
+        self.hdata = {}
 
         if hval:
             self.from_bytes(hval)
@@ -141,7 +152,7 @@ class DevsigHeader:
                 continue
             self.set_field(parts[0].decode(), parts[1])
 
-    def get_field_as_bytes(self, field: str) -> Optional[bytes]:
+    def get_field_as_bytes(self, field: str) -> bytes | None:
         """Get a header field value as bytes.
 
         Args:
@@ -152,7 +163,7 @@ class DevsigHeader:
         """
         return self.hdata.get(field)
 
-    def get_field_as_str(self, field: str) -> Optional[str]:
+    def get_field_as_str(self, field: str) -> str | None:
         """Get a header field value as a string.
 
         Args:
@@ -166,7 +177,7 @@ class DevsigHeader:
             return value.decode()
         return value
 
-    def get_field(self, field: str, decode: bool = False) -> Union[None, str, bytes]:
+    def get_field(self, field: str, decode: bool = False) -> None | str | bytes:
         """Get a header field value (deprecated).
 
         .. deprecated::
@@ -182,7 +193,7 @@ class DevsigHeader:
             return value.decode()
         return value
 
-    def set_field(self, field: str, value: Union[None, str, bytes]) -> None:
+    def set_field(self, field: str, value: None | str | bytes) -> None:
         """Set a header field value.
 
         Args:
@@ -196,7 +207,7 @@ class DevsigHeader:
             value = value.encode()
         self.hdata[field] = value
 
-    def set_body(self, body: bytes, maxlen: Optional[int] = None) -> None:
+    def set_body(self, body: bytes, maxlen: int | None = None) -> None:
         """Set the message body and compute its hash.
 
         Call this after git-mailinfo normalization.
@@ -220,7 +231,7 @@ class DevsigHeader:
         hashed.update(body)
         self._body_hash = base64.b64encode(hashed.digest())
 
-    def set_headers(self, headers: List[bytes], mode: str) -> None:
+    def set_headers(self, headers: list[bytes], mode: str) -> None:
         """Set message headers for signing or validation.
 
         Call this after git-mailinfo normalization.
@@ -233,8 +244,8 @@ class DevsigHeader:
             SigningError: If required headers are missing (sign mode).
             ValidationError: If required headers are not signed (validate mode).
         """
-        parsed = list()
-        allhdrs = set()
+        parsed: list[tuple[bytes, bytes]] = []
+        allhdrs: set[bytes] = set()
         # DKIM operates on headers in reverse order
         for header in reversed(headers):
             try:
@@ -247,16 +258,17 @@ class DevsigHeader:
 
         reqset = set(REQ_HDRS)
         optset = set(OPT_HDRS)
-        self._headervals = list()
+        self._headervals = []
         if mode == 'sign':
             # Make sure REQ_HDRS is a subset of allhdrs
             if not reqset.issubset(allhdrs):
                 raise SigningError(
-                    'The following required headers not present: %s'
-                    % (b', '.join(reqset.difference(allhdrs)).decode())
+                    'The following required headers not present: {}'.format(
+                        b', '.join(reqset.difference(allhdrs)).decode()
+                    )
                 )
             # Add optional headers that are actually present
-            optpresent = list(allhdrs.intersection(optset))
+            optpresent: list[bytes] = list(allhdrs.intersection(optset))
             signlist = REQ_HDRS + sorted(optpresent)
             self.hdata['h'] = b':'.join(signlist)
 
@@ -268,11 +280,12 @@ class DevsigHeader:
             # Make sure REQ_HEADERS are in this set
             if not reqset.issubset(set(signlist)):
                 raise ValidationError(
-                    'The following required headers not signed: %s'
-                    % (b', '.join(reqset.difference(set(signlist))).decode())
+                    'The following required headers not signed: {}'.format(
+                        b', '.join(reqset.difference(set(signlist))).decode()
+                    )
                 )
         else:
-            raise RuntimeError('Unknown set_header mode: %s' % mode)
+            raise RuntimeError(f'Unknown set_header mode: {mode}')
 
         for shname in signlist:
             if shname not in allhdrs:
@@ -298,7 +311,7 @@ class DevsigHeader:
         if not self._headervals:
             raise RuntimeError('Must use set_headers first')
 
-    def validate(self, keyinfo: Union[str, bytes, None]) -> Tuple[str, str]:
+    def validate(self, keyinfo: str | bytes | None) -> tuple[str, str]:
         """Validate the signature against the message content.
 
         Args:
@@ -309,6 +322,7 @@ class DevsigHeader:
             Tuple of (signing_key_id, sign_timestamp).
 
         Raises:
+            RuntimeError: If keyinfo is None for ed25519/openssh.
             BodyValidationError: If body hash doesn't match.
             ValidationError: If signature validation fails.
         """
@@ -338,7 +352,7 @@ class DevsigHeader:
 
         signtime: str
         if algo.startswith('openpgp'):
-            pubkey: Optional[bytes] = None
+            pubkey: bytes | None = None
             if isinstance(keyinfo, str):
                 pubkey = keyinfo.encode()
             else:
@@ -358,9 +372,9 @@ class DevsigHeader:
             skeyinfo = keyinfo
             bkeyinfo = keyinfo.encode()
         else:
-            # This cannot be None for any of the algorithms we support other than openpgp, done above
-            raise RuntimeError(
-                'keyinfo must be a string or bytes, not %s' % type(keyinfo).__name__
+            # Only openpgp accepts None; preserve the public RuntimeError contract.
+            raise RuntimeError(  # noqa: TRY004
+                f'keyinfo must be a string or bytes, not {type(keyinfo).__name__}'
             )
 
         if algo.startswith('ed25519'):
@@ -380,13 +394,11 @@ class DevsigHeader:
                 raise ValidationError('t= field is required for openssh sigs')
             signtime = _st
         else:
-            raise ValidationError('Unknown algorithm: %s' % algo)
+            raise ValidationError(f'Unknown algorithm: {algo}')
 
         return signkey, signtime
 
-    def sign(
-        self, keyinfo: Union[str, bytes], split: bool = True
-    ) -> Tuple[bytes, bytes]:
+    def sign(self, keyinfo: str | bytes, split: bool = True) -> tuple[bytes, bytes]:
         """Sign the message and generate signature header value.
 
         Args:
@@ -413,7 +425,7 @@ class DevsigHeader:
             skeyinfo = keyinfo
             bkeyinfo = keyinfo.encode()
 
-        hparts = list()
+        hparts: list[bytes] = []
         for fn in self._order:
             fv = self.get_field_as_bytes(fn)
             if fv is not None:
@@ -435,7 +447,7 @@ class DevsigHeader:
         elif algo.startswith('openssh'):
             bval, pkinfo = DevsigHeader._sign_openssh(digest, skeyinfo)
         else:
-            raise RuntimeError('Unknown a=%s' % algo)
+            raise RuntimeError(f'Unknown a={algo}')
 
         if split:
             return dshval + DevsigHeader.splitter(bval), pkinfo
@@ -443,20 +455,18 @@ class DevsigHeader:
         return dshval + bval, pkinfo
 
     @staticmethod
-    def _sign_ed25519(payload: bytes, privkey: bytes) -> Tuple[bytes, bytes]:
-        global KEYCACHE
-        try:
-            from nacl.encoding import Base64Encoder
-            from nacl.signing import SigningKey
-        except ModuleNotFoundError as ex:
-            raise RuntimeError('This operation requires PyNaCl libraries') from ex
-
+    def _sign_ed25519(payload: bytes, privkey: bytes) -> tuple[bytes, bytes]:
         if privkey not in KEYCACHE:
             sk = SigningKey(privkey, encoder=Base64Encoder)
             vk = base64.b64encode(sk.verify_key.encode())
             KEYCACHE[privkey] = (sk, vk)
         else:
-            sk, vk = KEYCACHE[privkey]
+            cached = KEYCACHE[privkey]
+            assert isinstance(cached, tuple)
+            cached_sk, cached_vk = cached
+            assert isinstance(cached_sk, SigningKey)
+            assert isinstance(cached_vk, bytes)
+            sk, vk = cached_sk, cached_vk
 
         bdata = sk.sign(payload, encoder=Base64Encoder)
 
@@ -464,13 +474,6 @@ class DevsigHeader:
 
     @staticmethod
     def _validate_ed25519(sigdata: bytes, pubkey: bytes) -> bytes:
-        try:
-            from nacl.encoding import Base64Encoder
-            from nacl.exceptions import BadSignatureError
-            from nacl.signing import VerifyKey
-        except ModuleNotFoundError as ex:
-            raise RuntimeError('This operation requires PyNaCl libraries') from ex
-
         vk = VerifyKey(pubkey, encoder=Base64Encoder)
         try:
             return vk.verify(sigdata, encoder=Base64Encoder)
@@ -478,11 +481,10 @@ class DevsigHeader:
             raise ValidationError('Failed to validate signature') from ex
 
     @staticmethod
-    def _sign_openssh(payload: bytes, keyfile: str) -> Tuple[bytes, bytes]:
-        global KEYCACHE
+    def _sign_openssh(payload: bytes, keyfile: str) -> tuple[bytes, bytes]:
         keypath = os.path.expanduser(os.path.expandvars(keyfile))
         if not os.access(keypath, os.R_OK):
-            raise SigningError('Unable to read openssh public key %s' % keypath)
+            raise SigningError(f'Unable to read openssh public key {keypath}')
         sshkargs = ['-Y', 'sign', '-n', 'patatt', '-f', keypath]
         ecode, out, err = sshk_run_command(sshkargs, payload)
         if ecode > 0:
@@ -507,7 +509,9 @@ class DevsigHeader:
             keyfp = chunks[1]
             KEYCACHE[keypath] = keyfp
         else:
-            keyfp = KEYCACHE[keypath]
+            cached = KEYCACHE[keypath]
+            assert isinstance(cached, bytes)
+            keyfp = cached
 
         return sigdata, keyfp
 
@@ -556,8 +560,7 @@ class DevsigHeader:
                 )
 
     @staticmethod
-    def _sign_openpgp(payload: bytes, keyid: str) -> Tuple[bytes, bytes]:
-        global KEYCACHE
+    def _sign_openpgp(payload: bytes, keyid: str) -> tuple[bytes, bytes]:
         gpgargs = ['-s', '-u', keyid]
         ecode, out, err = gpg_run_command(gpgargs, payload)
         if ecode > 0:
@@ -584,18 +587,19 @@ class DevsigHeader:
                         break
             KEYCACHE[keyid] = keyfp
         else:
-            keyfp = KEYCACHE[keyid]
+            cached = KEYCACHE[keyid]
+            assert cached is None or isinstance(cached, bytes)
+            keyfp = cached
 
         if keyfp is None:
-            raise SigningError('Could not find fingerprint for key %s' % keyid)
+            raise SigningError(f'Could not find fingerprint for key {keyid}')
 
         return bdata, keyfp
 
     @staticmethod
     def _validate_openpgp(
-        sigdata: bytes, pubkey: Optional[bytes]
-    ) -> Tuple[bytes, Tuple[bool, bool, bool, str, str]]:
-        global KEYCACHE
+        sigdata: bytes, pubkey: bytes | None
+    ) -> tuple[bytes, tuple[bool, bool, bool, str, str]]:
         bsigdata = base64.b64decode(sigdata)
         vrfyargs = ['--verify', '--output', '-', '--status-fd=2']
         if pubkey:
@@ -609,8 +613,10 @@ class DevsigHeader:
                 ]
                 if pubkey in KEYCACHE:
                     logger.debug('Reusing cached keyring')
+                    keyring = KEYCACHE[pubkey]
+                    assert isinstance(keyring, bytes)
                     with open(os.path.join(td, 'pub'), 'wb') as kfh:
-                        kfh.write(KEYCACHE[pubkey])
+                        kfh.write(keyring)
                 else:
                     logger.debug('Importing into new keyring')
                     gpgargs = keyringargs + ['--status-fd=1', '--import']
@@ -639,7 +645,7 @@ class DevsigHeader:
         raise ValidationError('Failed to validate PGP signature')
 
     @staticmethod
-    def _check_gpg_status(status: bytes) -> Tuple[bool, bool, bool, str, str]:
+    def _check_gpg_status(status: bytes) -> tuple[bool, bool, bool, str, str]:
         good = False
         valid = False
         trusted = False
@@ -649,24 +655,26 @@ class DevsigHeader:
         logger.debug(
             'GNUPG status:\n\t%s', status.decode().strip().replace('\n', '\n\t')
         )
-        if re.search(rb'^\[GNUPG:] GOODSIG ([0-9A-F]+)\s+(.*)$', status, flags=re.M):
+        if re.search(
+            rb'^\[GNUPG:] GOODSIG ([0-9A-F]+)\s+(.*)$', status, flags=re.MULTILINE
+        ):
             good = True
         if vs_matches := re.search(
             rb'^\[GNUPG:] VALIDSIG ([0-9A-F]+) (\d{4}-\d{2}-\d{2}) (\d+)',
             status,
-            flags=re.M,
+            flags=re.MULTILINE,
         ):
             valid = True
-            signkey = vs_matches.groups()[0].decode()
-            signtime = vs_matches.groups()[2].decode()
-        if re.search(rb'^\[GNUPG:] TRUST_(FULLY|ULTIMATE)', status, flags=re.M):
+            signkey = str(vs_matches.group(1), 'ascii')
+            signtime = str(vs_matches.group(3), 'ascii')
+        if re.search(rb'^\[GNUPG:] TRUST_(FULLY|ULTIMATE)', status, flags=re.MULTILINE):
             trusted = True
 
         return good, valid, trusted, signkey, signtime
 
     @staticmethod
     def splitter(longstr: bytes, limit: int = 75) -> bytes:
-        splitstr = list()
+        splitstr: list[bytes] = []
         first = True
         while len(longstr) > limit:
             at = limit
@@ -720,17 +728,17 @@ class PatattMessage:
         msgdata: Raw message bytes in RFC2822 format.
     """
 
-    headers: List[bytes]
+    headers: list[bytes]
     body: bytes
     lf: bytes
     signed: bool
-    canon_headers: Optional[List[bytes]]
-    canon_body: Optional[bytes]
-    canon_identity: Optional[str]
-    sigs: Optional[List[DevsigHeader]]
+    canon_headers: list[bytes] | None
+    canon_body: bytes | None
+    canon_identity: str | None
+    sigs: list[DevsigHeader] | None
 
     def __init__(self, msgdata: bytes):
-        self.headers = list()
+        self.headers = []
         self.body = b''
         self.lf = b'\n'
         self.signed = False
@@ -761,7 +769,7 @@ class PatattMessage:
         for line in re.sub(rb'[\r\n]*$', b'', m + p).split(b'\n'):
             self.canon_body += re.sub(rb'[\r\n]*$', b'', line) + b'\r\n'
 
-        idata = dict()
+        idata: dict[bytes, bytes] = {}
         for line in re.sub(rb'[\r\n]*$', b'', i).split(b'\n'):
             left, right = line.split(b':', 1)
             idata[left.lower()] = right.strip()
@@ -770,7 +778,7 @@ class PatattMessage:
         self.canon_identity = idata.get(b'email', b'').decode()
 
         # Now substituting headers returned by mailinfo
-        self.canon_headers = list()
+        self.canon_headers = []
         for header in self.headers:
             try:
                 left, right = header.split(b':', 1)
@@ -792,9 +800,9 @@ class PatattMessage:
     def sign(
         self,
         algo: str,
-        keyinfo: Union[str, bytes],
-        identity: Optional[str],
-        selector: Optional[str],
+        keyinfo: str | bytes,
+        identity: str | None,
+        selector: str | None,
     ) -> None:
         """Sign the message and add signature headers.
 
@@ -830,9 +838,9 @@ class PatattMessage:
             ds.set_field('s', selector)
 
         if algo not in ('ed25519', 'openpgp', 'openssh'):
-            raise SigningError('Unsupported algorithm: %s' % algo)
+            raise SigningError(f'Unsupported algorithm: {algo}')
 
-        ds.set_field('a', '%s-sha256' % algo)
+        ds.set_field('a', f'{algo}-sha256')
         if algo in ('ed25519', 'openssh'):
             # Set signing time for non-pgp sigs
             ds.set_field('t', str(int(time.time())))
@@ -848,9 +856,7 @@ class PatattMessage:
             b'i=%s' % identity.encode(),
             b'a=%s' % algo.encode(),
         ]
-        if algo == 'openpgp':
-            idata.append(b'fpr=%s' % pkinfo)
-        elif algo == 'openssh':
+        if algo == 'openpgp' or algo == 'openssh':
             idata.append(b'fpr=%s' % pkinfo)
         else:
             idata.append(b'pk=%s' % pkinfo)
@@ -861,8 +867,8 @@ class PatattMessage:
         self.headers.append(dkhdr.encode().encode() + self.lf)
 
     def validate(
-        self, identity: str, pkey: Union[bytes, str, None], trim_body: bool = False
-    ) -> Tuple[str, str]:
+        self, identity: str, pkey: bytes | str | None, trim_body: bool = False
+    ) -> tuple[str, str]:
         """Validate the signature for a specific identity.
 
         Args:
@@ -886,7 +892,7 @@ class PatattMessage:
                 vds = ds
                 break
         if vds is None:
-            raise ValidationError('No signatures matching identity %s' % identity)
+            raise ValidationError(f'No signatures matching identity {identity}')
 
         self.git_canonicalize()
         if not self.canon_headers or not self.canon_body:
@@ -955,7 +961,7 @@ class PatattMessage:
         if not len(self.headers) or not len(self.body):
             raise RuntimeError('Not a valid RFC2822 message')
 
-    def get_sigs(self) -> List[DevsigHeader]:
+    def get_sigs(self) -> list[DevsigHeader]:
         """Extract and return all signature headers from the message.
 
         Returns:
@@ -969,7 +975,7 @@ class PatattMessage:
             return self.sigs
 
         ldshn = DEVSIG_HDR.lower()
-        self.sigs = list()
+        self.sigs = []
         from_id = None
 
         for header in self.headers:
@@ -993,7 +999,7 @@ class PatattMessage:
         return self.sigs
 
     @staticmethod
-    def _get_git_mailinfo(payload: bytes) -> Tuple[bytes, bytes, bytes]:
+    def _get_git_mailinfo(payload: bytes) -> tuple[bytes, bytes, bytes]:
         with tempfile.TemporaryDirectory(suffix='.git-mailinfo') as td:
             mf = os.path.join(td, 'm')
             pf = os.path.join(td, 'p')
@@ -1004,7 +1010,7 @@ class PatattMessage:
             if ecode > 0:
                 logger.debug('FAILED  : Failed running git-mailinfo:')
                 logger.debug(err.decode())
-                raise RuntimeError('Failed to run git-mailinfo: %s' % err.decode())
+                raise RuntimeError(f'Failed to run git-mailinfo: {err.decode()}')
 
             with open(mf, 'rb') as mfh:
                 m = mfh.read()
@@ -1019,8 +1025,8 @@ def get_data_dir() -> Path:
     Returns:
         Path to $XDG_DATA_HOME/patatt or ~/.local/share/patatt.
     """
-    if 'XDG_DATA_HOME' in os.environ:
-        datahome = Path(os.environ['XDG_DATA_HOME'])
+    if (xdg_data_home := os.environ.get('XDG_DATA_HOME')) is not None:
+        datahome = Path(xdg_data_home)
     else:
         datahome = Path.home() / '.local' / 'share'
     datadir = datahome / 'patatt'
@@ -1029,10 +1035,10 @@ def get_data_dir() -> Path:
 
 
 def _run_command(
-    cmdargs: List[str],
-    stdin: Optional[bytes] = None,
-    env: Optional[Dict[str, str]] = None,
-) -> Tuple[int, bytes, bytes]:
+    cmdargs: list[str],
+    stdin: bytes | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[int, bytes, bytes]:
     logger.debug('Running %s', ' '.join(cmdargs))
     # Redirect stdout/stderr to real temporary files instead of capture_output
     # pipes. gpg auto-starts daemon children (gpg-agent, scdaemon) that inherit
@@ -1043,7 +1049,13 @@ def _run_command(
     # uses the controlling terminal rather than stdout.
     with tempfile.TemporaryFile() as outf, tempfile.TemporaryFile() as errf:
         cp = subprocess.run(
-            cmdargs, input=stdin, env=env, stdout=outf, stderr=errf, text=False
+            cmdargs,
+            input=stdin,
+            env=env,
+            stdout=outf,
+            stderr=errf,
+            text=False,
+            check=False,
         )
         outf.seek(0)
         errf.seek(0)
@@ -1054,11 +1066,11 @@ def _run_command(
 
 
 def git_run_command(
-    gitdir: Optional[str],
-    args: List[str],
-    stdin: Optional[bytes] = None,
-    env: Optional[Dict[str, str]] = None,
-) -> Tuple[int, bytes, bytes]:
+    gitdir: str | None,
+    args: list[str],
+    stdin: bytes | None = None,
+    env: dict[str, str] | None = None,
+) -> tuple[int, bytes, bytes]:
     if gitdir:
         args = ['git', '--git-dir', gitdir, '--no-pager'] + args
     else:
@@ -1068,17 +1080,17 @@ def git_run_command(
 
 def get_config_from_git(
     regexp: str,
-    section: Optional[str] = None,
-    defaults: Optional[Dict[str, Union[str, List[str]]]] = None,
-    multivals: Optional[List[str]] = None,
+    section: str | None = None,
+    defaults: dict[str, str | list[str]] | None = None,
+    multivals: list[str] | None = None,
 ) -> GitConfigType:
     if multivals is None:
-        multivals = list()
+        multivals = []
 
     args = ['config', '-z', '--get-regexp', regexp]
     _, bout, _ = git_run_command(None, args)
     if defaults is None:
-        defaults = dict()
+        defaults = {}
 
     if not len(bout):
         return defaults
@@ -1111,11 +1123,11 @@ def get_config_from_git(
             if cfgkey in multivals:
                 curval = gitconfig.get(cfgkey)
                 if isinstance(curval, list):
-                    newval = list(curval)
+                    newval: list[str] = list(curval)
                 elif isinstance(curval, str):
                     newval = [curval]
                 else:
-                    newval = list()
+                    newval = []
                 newval.append(value)
                 gitconfig[cfgkey] = newval
             else:
@@ -1127,8 +1139,8 @@ def get_config_from_git(
 
 
 def gpg_run_command(
-    cmdargs: List[str], stdin: Optional[bytes] = None
-) -> Tuple[int, bytes, bytes]:
+    cmdargs: list[str], stdin: bytes | None = None
+) -> tuple[int, bytes, bytes]:
     gpgbin, _ = set_bin_paths(None)
     cmdargs = [
         gpgbin,
@@ -1140,14 +1152,14 @@ def gpg_run_command(
 
 
 def sshk_run_command(
-    cmdargs: List[str], stdin: Optional[bytes] = None
-) -> Tuple[int, bytes, bytes]:
+    cmdargs: list[str], stdin: bytes | None = None
+) -> tuple[int, bytes, bytes]:
     _, sshkbin = set_bin_paths(None)
     cmdargs = [sshkbin] + cmdargs
     return _run_command(cmdargs, stdin)
 
 
-def get_git_toplevel(gitdir: Optional[str] = None) -> str:
+def get_git_toplevel(gitdir: str | None = None) -> str:
     cmdargs = ['git']
     if gitdir:
         cmdargs += ['--git-dir', gitdir]
@@ -1219,7 +1231,7 @@ def make_byhash_path(keytype: str, identity: str, selector: str) -> Path:
 
 def get_public_key(
     source: str, keytype: str, identity: str, selector: str
-) -> Tuple[bytes, str]:
+) -> tuple[bytes, str]:
     """Look up a public key from a keyring source.
 
     Searches for the key at the standard path first, then falls back to
@@ -1248,7 +1260,7 @@ def get_public_key(
         parts = source.split(':', 4)
         if len(parts) < 4:
             raise ConfigurationError(
-                'Invalid ref, must have at least 3 colons: %s' % source
+                f'Invalid ref, must have at least 3 colons: {source}'
             )
         gitrepo = parts[1]
         gitref = parts[2]
@@ -1277,7 +1289,7 @@ def get_public_key(
             if ecode == 0:
                 gitref = out.decode().strip()
         if not gitref:
-            raise KeyError('Could not figure out current ref in %s' % gittop)
+            raise KeyError(f'Could not figure out current ref in {gittop}')
 
         keysrc = f'{gitref}:{subpath}'
         cmdargs = ['show', keysrc]
@@ -1294,9 +1306,9 @@ def get_public_key(
                 ecode, out, _ = git_run_command(gittop, cmdargs)
                 if ecode == 0:
                     logger.debug('KEYSRC  : %s (symlinked)', keysrc)
-                    return out, 'ref:%s:%s' % (gittop, keysrc)
+                    return out, f'ref:{gittop}:{keysrc}'
             logger.debug('KEYSRC  : %s', keysrc)
-            return out, 'ref:%s:%s' % (gittop, keysrc)
+            return out, f'ref:{gittop}:{keysrc}'
 
         # Does it exist on disk but hasn't been committed yet?
         fullpath = Path(gitrepo) / subpath
@@ -1313,7 +1325,7 @@ def get_public_key(
         ecode, out, _ = git_run_command(gittop, cmdargs)
         if ecode == 0:
             logger.debug('KEYSRC  : %s (by-hash)', keysrc)
-            return out, 'ref:%s:%s' % (gittop, keysrc)
+            return out, f'ref:{gittop}:{keysrc}'
 
         # Check disk for by-hash path
         fullpath = Path(gitrepo) / byhash_subpath
@@ -1322,7 +1334,7 @@ def get_public_key(
                 logger.debug('KEYSRC  : %s (by-hash)', fullpath)
                 return fh.read(), str(fullpath)
 
-        raise KeyError('Could not find %s in %s:%s' % (subpath, gittop, gitref))
+        raise KeyError(f'Could not find {subpath} in {gittop}:{gitref}')
 
     # It's a disk path, then
     # Expand ~ and env vars
@@ -1343,20 +1355,20 @@ def get_public_key(
             logger.debug('Loaded key from %s (by-hash)', byhash_fullpath)
             return fh.read(), str(byhash_fullpath)
 
-    raise KeyError('Could not find %s' % fullpath)
+    raise KeyError(f'Could not find {fullpath}')
 
 
-def _load_messages(cmdargs: argparse.Namespace) -> Dict[str, bytes]:
+def _load_messages(cmdargs: argparse.Namespace) -> dict[str, bytes]:
     import sys
 
+    messages: dict[str, bytes] = {}
     if len(cmdargs.msgfile):
         # Load all message from the files passed to make sure they all parse correctly
-        messages = dict()
         for msgfile in cmdargs.msgfile:
             with open(msgfile, 'rb') as fh:
                 messages[msgfile] = fh.read()
     elif not sys.stdin.isatty():
-        messages = {'-': sys.stdin.buffer.read()}
+        messages['-'] = sys.stdin.buffer.read()
     else:
         logger.critical(
             'E: Pipe a message to sign or pass filenames with individual messages'
@@ -1369,9 +1381,9 @@ def _load_messages(cmdargs: argparse.Namespace) -> Dict[str, bytes]:
 def sign_message(
     msgdata: bytes,
     algo: str,
-    keyinfo: Union[str, bytes],
-    identity: Optional[str],
-    selector: Optional[str],
+    keyinfo: str | bytes,
+    identity: str | None,
+    selector: str | None,
 ) -> bytes:
     """Sign an RFC2822 message and return the signed message bytes.
 
@@ -1390,7 +1402,7 @@ def sign_message(
     return pm.as_bytes()
 
 
-def set_bin_paths(config: Optional[GitConfigType]) -> Tuple[str, str]:
+def set_bin_paths(config: GitConfigType | None) -> tuple[str, str]:
     global GPGBIN, SSHKBIN
     if GPGBIN is None:
         if config and config.get('gpg-bin'):
@@ -1417,8 +1429,7 @@ def set_bin_paths(config: Optional[GitConfigType]) -> Tuple[str, str]:
     return GPGBIN, SSHKBIN
 
 
-def get_algo_keydata(config: GitConfigType) -> Tuple[str, str]:
-    global KEYCACHE
+def get_algo_keydata(config: GitConfigType) -> tuple[str, str]:
     # Do we have the signingkey defined?
     usercfg = get_config_from_git(r'user\..*')
     if not config.get('identity') and usercfg.get('email'):
@@ -1428,11 +1439,14 @@ def get_algo_keydata(config: GitConfigType) -> Tuple[str, str]:
     identity = config.get('identity')
     if not isinstance(identity, str):
         raise ConfigurationError(
-            'Identity must be a string, got %s' % type(identity).__name__
+            f'Identity must be a string, got {type(identity).__name__}'
         )
 
-    if identity in KEYCACHE:
-        algo, keydata = KEYCACHE[identity]
+    if (cached := KEYCACHE.get(identity)) is not None:
+        assert isinstance(cached, tuple)
+        algo, keydata = cached
+        assert isinstance(algo, str)
+        assert isinstance(keydata, str)
         return algo, keydata
 
     if not config.get('signingkey'):
@@ -1446,7 +1460,7 @@ def get_algo_keydata(config: GitConfigType) -> Tuple[str, str]:
                 user_signingkey,
             )
             logger.info('N: Override by setting patatt.signingkey')
-            config['signingkey'] = '%s:%s' % (key_algo, user_signingkey)
+            config['signingkey'] = f'{key_algo}:{user_signingkey}'
         else:
             logger.critical('E: patatt.signingkey is not set')
             logger.critical('E: Perhaps you need to run genkey first?')
@@ -1455,7 +1469,7 @@ def get_algo_keydata(config: GitConfigType) -> Tuple[str, str]:
     sk = config.get('signingkey')
     if not isinstance(sk, str):
         raise ConfigurationError(
-            'Signing key must be a string, got %s' % type(sk).__name__
+            f'Signing key must be a string, got {type(sk).__name__}'
         )
     if sk.startswith('ed25519:'):
         algo = 'ed25519'
@@ -1477,7 +1491,7 @@ def get_algo_keydata(config: GitConfigType) -> Tuple[str, str]:
                         keysrc = str(skey)
 
         if not keysrc:
-            raise ConfigurationError('Could not find the key matching %s' % identifier)
+            raise ConfigurationError(f'Could not find the key matching {identifier}')
 
         logger.info('N: Using ed25519 key: %s', keysrc)
         with open(keysrc, 'r') as fh:
@@ -1491,13 +1505,13 @@ def get_algo_keydata(config: GitConfigType) -> Tuple[str, str]:
         keydata = sk[8:]
     else:
         logger.critical('E: Unknown key type: %s', sk)
-        raise ConfigurationError('Unknown key type: %s' % sk)
+        raise ConfigurationError(f'Unknown key type: {sk}')
 
     KEYCACHE[identity] = (algo, keydata)
     return algo, keydata
 
 
-def rfc2822_sign(message: bytes, config: Optional[GitConfigType] = None) -> bytes:
+def rfc2822_sign(message: bytes, config: GitConfigType | None = None) -> bytes:
     if config is None:
         config = get_main_config()
     algo, keydata = get_algo_keydata(config)
@@ -1512,7 +1526,7 @@ def rfc2822_sign(message: bytes, config: Optional[GitConfigType] = None) -> byte
     return pm.as_bytes()
 
 
-def get_main_config(section: Optional[str] = None) -> GitConfigType:
+def get_main_config(section: str | None = None) -> GitConfigType:
     """Load patatt configuration from git config.
 
     Args:
@@ -1523,7 +1537,6 @@ def get_main_config(section: Optional[str] = None) -> GitConfigType:
         Configuration dictionary with keyring sources and settings.
         Results are cached per section.
     """
-    global CONFIGCACHE
     if section:
         csection = section
     else:
@@ -1535,7 +1548,7 @@ def get_main_config(section: Optional[str] = None) -> GitConfigType:
     )
     # Append some extra keyring locations
     if 'keyringsrc' not in config or not isinstance(config['keyringsrc'], list):
-        config['keyringsrc'] = list()
+        config['keyringsrc'] = []
     assert isinstance(config['keyringsrc'], list)  # Just to make lint checkers shut up
     config['keyringsrc'] += [
         'ref:::.keys',
@@ -1551,7 +1564,7 @@ def get_main_config(section: Optional[str] = None) -> GitConfigType:
 def cmd_sign(cmdargs: argparse.Namespace, config: GitConfigType) -> None:
     try:
         messages = _load_messages(cmdargs)
-    except IOError as ex:
+    except OSError as ex:
         logger.critical('E: %s', ex)
         sys.exit(1)
 
@@ -1582,10 +1595,8 @@ def cmd_sign(cmdargs: argparse.Namespace, config: GitConfigType) -> None:
 
 
 def validate_message(
-    msgdata: bytes, sources: List[str], trim_body: bool = False
-) -> List[
-    Tuple[int, Optional[str], Optional[str], Optional[str], Optional[str], List[str]]
-]:
+    msgdata: bytes, sources: list[str], trim_body: bool = False
+) -> list[AttestationResult]:
     """Validate all signatures in an RFC2822 message.
 
     Args:
@@ -1599,11 +1610,7 @@ def validate_message(
 
         Result codes: RES_VALID, RES_BADSIG, RES_NOKEY, RES_NOSIG, RES_ERROR
     """
-    attestations: List[
-        Tuple[
-            int, Optional[str], Optional[str], Optional[str], Optional[str], List[str]
-        ]
-    ] = list()
+    attestations: list[AttestationResult] = []
     pm = PatattMessage(msgdata)
     if not pm.signed:
         logger.debug('message is not signed')
@@ -1614,7 +1621,7 @@ def validate_message(
 
     # Find all identities for which we have public keys
     for ds in pm.get_sigs():
-        errors = list()
+        errors: list[str] = []
         a = ds.get_field_as_str('a')
         i = ds.get_field_as_str('i')
         s = ds.get_field_as_str('s')
@@ -1637,7 +1644,7 @@ def validate_message(
         elif a.startswith('openssh'):
             algo = 'openssh'
         else:
-            errors.append('%s/%s Unknown algorigthm: %s' % (i, s, a))
+            errors.append(f'{i}/{s} Unknown algorigthm: {a}')
             attestations.append((RES_ERROR, i, t, None, a, errors))
             continue
 
@@ -1650,7 +1657,7 @@ def validate_message(
                 pass
 
         if not pkey and algo in ('ed25519', 'openssh'):
-            errors.append('%s/%s no matching %s key found' % (i, s, algo))
+            errors.append(f'{i}/{s} no matching {algo} key found')
             attestations.append((RES_NOKEY, i, t, None, algo, errors))
             continue
 
@@ -1658,17 +1665,17 @@ def validate_message(
             signkey, signtime = pm.validate(i, pkey, trim_body=trim_body)
             if keysrc is None:
                 # Default keyring used
-                keysrc = '(default keyring)/%s' % signkey
+                keysrc = f'(default keyring)/{signkey}'
             attestations.append((RES_VALID, i, signtime, keysrc, algo, errors))
         except NoKeyError:
             # Not in default keyring
-            errors.append('%s/%s no matching openpgp key found' % (i, s))
+            errors.append(f'{i}/{s} no matching openpgp key found')
             attestations.append((RES_NOKEY, i, t, None, algo, errors))
         except ValidationError:
             if keysrc is None:
                 errors.append('failed to validate using default keyring')
             else:
-                errors.append('failed to validate using %s' % keysrc)
+                errors.append(f'failed to validate using {keysrc}')
             attestations.append((RES_BADSIG, i, t, keysrc, algo, errors))
 
     return attestations
@@ -1681,26 +1688,28 @@ def cmd_validate(cmdargs: argparse.Namespace, config: GitConfigType) -> None:
         # Try to open as an mbox file
         try:
             mbox = mailbox.mbox(cmdargs.msgfile[0])
-        except IOError as ex:
+        except OSError as ex:
             logger.critical('E: %s', ex)
             sys.exit(1)
 
-        messages = dict()
+        messages: dict[str, bytes] = {}
         for msg in mbox:
-            subject = msg.get('Subject', 'No subject')
+            subject = str(msg.get('Subject', 'No subject'))
             messages[subject] = msg.as_bytes()
     else:
         try:
             messages = _load_messages(cmdargs)
-        except IOError as ex:
+        except OSError as ex:
             logger.critical('E: %s', ex)
             sys.exit(1)
 
     ddir = get_data_dir()
     pdir = ddir / 'public'
-    sources = config.get('keyringsrc', list())
-    if not isinstance(sources, list):
-        sources = [sources]
+    raw_sources = config.get('keyringsrc', [])
+    if isinstance(raw_sources, list):
+        sources = raw_sources
+    else:
+        sources = [raw_sources]
 
     if str(pdir) not in sources:
         sources.append(str(pdir))
@@ -1715,8 +1724,7 @@ def cmd_validate(cmdargs: argparse.Namespace, config: GitConfigType) -> None:
         try:
             attestations = validate_message(msgdata, sources, trim_body=trim_body)
             for result, identity, _signtime, keysrc, _algo, errors in attestations:
-                if result > highest_err:
-                    highest_err = result
+                highest_err = max(highest_err, result)
 
                 if result == RES_VALID:
                     logger.critical('  PASS | %s, %s', identity, fn)
@@ -1749,11 +1757,6 @@ def cmd_validate(cmdargs: argparse.Namespace, config: GitConfigType) -> None:
 
 
 def cmd_genkey(cmdargs: argparse.Namespace, config: GitConfigType) -> None:
-    try:
-        from nacl.signing import SigningKey
-    except ModuleNotFoundError as ex:
-        raise RuntimeError('This operation requires PyNaCl libraries') from ex
-
     # Do we have the signingkey defined?
     usercfg = get_config_from_git(r'user\..*')
     if not config.get('identity'):

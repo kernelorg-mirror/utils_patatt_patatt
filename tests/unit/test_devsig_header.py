@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import base64
 import hashlib
 from io import BytesIO
@@ -76,7 +78,7 @@ class TestDevsigHeader:
         header = DevsigHeader()
 
         # Parse the sample email to get headers
-        headers = []
+        headers: list[bytes] = []
         with BytesIO(sample_email_bytes) as fh:
             while True:
                 line = fh.readline()
@@ -109,8 +111,11 @@ class TestDevsigHeader:
         with pytest.raises(RuntimeError, match='Must use set_headers first'):
             header.sanity_check()
 
-    # @pytest.mark.skipif(True, reason="Requires actual ed25519 keys")
-    # def test_sign_ed25519(self, sample_ed25519_key_pair: Dict[str, bytes]) -> None:
-    #     """Test signing with ed25519."""
-    #     # This test would require actual keys and more setup
-    #     pass
+    def test_sign_ed25519(self, sample_ed25519_key_pair: dict[str, bytes]) -> None:
+        """Sign and verify with both freshly loaded and cached key data."""
+        for payload in (b'first message', b'second message'):
+            signed, public_key = DevsigHeader._sign_ed25519(
+                payload, sample_ed25519_key_pair['private']
+            )
+            assert public_key == sample_ed25519_key_pair['public']
+            assert DevsigHeader._validate_ed25519(signed, public_key) == payload

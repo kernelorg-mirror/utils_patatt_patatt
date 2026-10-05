@@ -4,7 +4,6 @@
 __pycache__
 .venv
 .venv-*
-uv.lock
 .idea
 *.egg-info
 build

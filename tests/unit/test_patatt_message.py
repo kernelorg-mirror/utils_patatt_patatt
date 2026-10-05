@@ -1,4 +1,4 @@
-from typing import Tuple
+from __future__ import annotations
 
 import pytest
 
@@ -49,7 +49,7 @@ This is a test body.
         """Test git canonicalization of message."""
 
         # Mock _get_git_mailinfo to avoid actual git command execution
-        def mock_get_git_mailinfo(payload: bytes) -> Tuple[bytes, bytes, bytes]:
+        def mock_get_git_mailinfo(payload: bytes) -> tuple[bytes, bytes, bytes]:
             # Return mock metadata, patch, and info
             metadata = (
                 b'Author: Test User\nEmail: test@example.com\nSubject: Test email\n'
