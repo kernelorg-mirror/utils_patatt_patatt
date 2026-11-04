@@ -55,10 +55,10 @@ REQ_HDRS: list[bytes] = [b'from', b'subject']
 OPT_HDRS: list[bytes] = [b'message-id']
 
 # Quick cache for key info
-KEYCACHE: dict[
-    str | bytes,
-    bytes | tuple[SigningKey, bytes] | tuple[str, str] | None,
-] = {}
+KEYCACHE: dict[str | bytes, bytes | tuple[SigningKey, bytes] | None] = {}
+# Signing algorithm and key data per identity, kept apart from KEYCACHE
+# because an identity can be spelled like a key ID
+IDENTITYCACHE: dict[str, tuple[str, str]] = {}
 # Quick cache for config settings
 CONFIGCACHE: dict[str, GitConfigType] = {}
 
@@ -1442,12 +1442,8 @@ def get_algo_keydata(config: GitConfigType) -> tuple[str, str]:
             f'Identity must be a string, got {type(identity).__name__}'
         )
 
-    if (cached := KEYCACHE.get(identity)) is not None:
-        assert isinstance(cached, tuple)
-        algo, keydata = cached
-        assert isinstance(algo, str)
-        assert isinstance(keydata, str)
-        return algo, keydata
+    if (cached := IDENTITYCACHE.get(identity)) is not None:
+        return cached
 
     if not config.get('signingkey'):
         user_signingkey = usercfg.get('signingkey')
@@ -1507,7 +1503,7 @@ def get_algo_keydata(config: GitConfigType) -> tuple[str, str]:
         logger.critical('E: Unknown key type: %s', sk)
         raise ConfigurationError(f'Unknown key type: {sk}')
 
-    KEYCACHE[identity] = (algo, keydata)
+    IDENTITYCACHE[identity] = (algo, keydata)
     return algo, keydata
 
 

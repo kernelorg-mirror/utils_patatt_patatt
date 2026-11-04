@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from patatt import (
+    IDENTITYCACHE,
     KEYCACHE,
     GitConfigType,
     NoKeyError,
@@ -34,8 +35,9 @@ class TestGetAlgoKeydataSSHSigningKey:
     """Tests for the user.signingkey + gpg.format detection in get_algo_keydata."""
 
     def setup_method(self) -> None:
-        """Clear KEYCACHE before each test to avoid cross-test pollution."""
+        """Clear the caches before each test to avoid cross-test pollution."""
         KEYCACHE.clear()
+        IDENTITYCACHE.clear()
 
     @patch('patatt.get_config_from_git')
     def test_ssh_format_uses_openssh(self, mock_gcfg: MagicMock) -> None:
@@ -125,9 +127,9 @@ class TestGetAlgoKeydataSSHSigningKey:
         assert algo == 'openssh'
 
     @patch('patatt.get_config_from_git')
-    def test_keycache_hit_skips_lookup(self, mock_gcfg: MagicMock) -> None:
-        """When identity is already in KEYCACHE, return cached result directly."""
-        KEYCACHE['cached@example.com'] = ('openssh', '/cached/key')
+    def test_identitycache_hit_skips_lookup(self, mock_gcfg: MagicMock) -> None:
+        """When identity is already in IDENTITYCACHE, return cached result directly."""
+        IDENTITYCACHE['cached@example.com'] = ('openssh', '/cached/key')
 
         mock_gcfg.side_effect = _make_mock_get_config(
             usercfg={'email': 'cached@example.com'},
@@ -138,6 +140,26 @@ class TestGetAlgoKeydataSSHSigningKey:
 
         assert algo == 'openssh'
         assert keydata == '/cached/key'
+
+    @patch('patatt.get_config_from_git')
+    def test_signingkey_equal_to_identity_stays_out_of_keycache(
+        self, mock_gcfg: MagicMock
+    ) -> None:
+        """A signing key spelled like the identity must not leave a tuple in KEYCACHE.
+
+        _sign_openpgp() caches fingerprints in KEYCACHE by key ID, so a tuple
+        stored there under the same string would come back as the fingerprint
+        """
+        mock_gcfg.side_effect = _make_mock_get_config(
+            usercfg={'email': 'test@example.com', 'signingkey': 'test@example.com'},
+            gpgcfg={},
+        )
+        config: GitConfigType = {'identity': 'test@example.com'}
+        algo, keydata = get_algo_keydata(config)
+
+        assert (algo, keydata) == ('openpgp', 'test@example.com')
+        assert 'test@example.com' not in KEYCACHE
+        assert IDENTITYCACHE['test@example.com'] == ('openpgp', 'test@example.com')
 
     @patch('patatt.get_config_from_git')
     def test_unknown_gpg_format_defaults_to_openpgp(self, mock_gcfg: MagicMock) -> None:
