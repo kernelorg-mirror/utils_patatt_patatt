@@ -6,9 +6,19 @@ import pytest
 from patatt import (
     IDENTITYCACHE,
     KEYCACHE,
+    DevsigHeader,
     GitConfigType,
     NoKeyError,
     get_algo_keydata,
+)
+
+# Output of "gpg --with-colons --fingerprint", trimmed to the lines that
+# _sign_openpgp() parses.
+GPG_FINGERPRINT_OUTPUT = (
+    b'pub:u:255:22:3C320AE3582D9EC9:1791176735:::u:::scESC:::::ed25519:::0:\n'
+    b'fpr:::::::::C7CB17FE6660C7E2B8F285A83C320AE3582D9EC9:\n'
+    b'uid:u::::1791176735::0000000000000000000000000000000000000000::'
+    b'test@example.com::::::::::0:\n'
 )
 
 
@@ -141,25 +151,31 @@ class TestGetAlgoKeydataSSHSigningKey:
         assert algo == 'openssh'
         assert keydata == '/cached/key'
 
+    @patch('patatt.gpg_run_command')
     @patch('patatt.get_config_from_git')
-    def test_signingkey_equal_to_identity_stays_out_of_keycache(
-        self, mock_gcfg: MagicMock
+    def test_signingkey_equal_to_identity_signs(
+        self, mock_gcfg: MagicMock, mock_gpg: MagicMock
     ) -> None:
-        """A signing key spelled like the identity must not leave a tuple in KEYCACHE.
+        """Signing must work when user.signingkey is spelled like user.email.
 
-        _sign_openpgp() caches fingerprints in KEYCACHE by key ID, so a tuple
-        stored there under the same string would come back as the fingerprint
+        This is a common way to name a GPG key. The identity lookup and the
+        fingerprint lookup in _sign_openpgp() both use this string as a key,
+        so they must not read each other's cached data.
         """
         mock_gcfg.side_effect = _make_mock_get_config(
             usercfg={'email': 'test@example.com', 'signingkey': 'test@example.com'},
             gpgcfg={},
         )
+        mock_gpg.side_effect = [
+            (0, b'signature', b''),
+            (0, GPG_FINGERPRINT_OUTPUT, b''),
+        ]
         config: GitConfigType = {'identity': 'test@example.com'}
         algo, keydata = get_algo_keydata(config)
-
         assert (algo, keydata) == ('openpgp', 'test@example.com')
-        assert 'test@example.com' not in KEYCACHE
-        assert IDENTITYCACHE['test@example.com'] == ('openpgp', 'test@example.com')
+
+        _bdata, keyfp = DevsigHeader._sign_openpgp(b'payload', keydata)
+        assert keyfp == b'C7CB17FE6660C7E2B8F285A83C320AE3582D9EC9'
 
     @patch('patatt.get_config_from_git')
     def test_unknown_gpg_format_defaults_to_openpgp(self, mock_gcfg: MagicMock) -> None:
