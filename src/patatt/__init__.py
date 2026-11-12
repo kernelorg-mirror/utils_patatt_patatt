@@ -56,9 +56,9 @@ OPT_HDRS: list[bytes] = [b'message-id']
 
 # Quick cache for key info
 KEYCACHE: dict[str | bytes, bytes | tuple[SigningKey, bytes] | None] = {}
-# Signing algorithm and key data per identity, kept apart from KEYCACHE
-# because an identity can be spelled like a key ID
-IDENTITYCACHE: dict[str, tuple[str, str]] = {}
+# Signing algorithm and key data per (identity, signingkey), kept apart
+# from KEYCACHE because an identity can be spelled like a key ID
+IDENTITYCACHE: dict[tuple[str, str], tuple[str, str]] = {}
 # Quick cache for config settings
 CONFIGCACHE: dict[str, GitConfigType] = {}
 
@@ -1435,15 +1435,11 @@ def get_algo_keydata(config: GitConfigType) -> tuple[str, str]:
     if not config.get('identity') and usercfg.get('email'):
         # Use user.email
         config['identity'] = str(usercfg.get('email'))
-    # Do we have this already looked up?
     identity = config.get('identity')
     if not isinstance(identity, str):
         raise ConfigurationError(
             f'Identity must be a string, got {type(identity).__name__}'
         )
-
-    if (cached := IDENTITYCACHE.get(identity)) is not None:
-        return cached
 
     if not config.get('signingkey'):
         user_signingkey = usercfg.get('signingkey')
@@ -1467,6 +1463,11 @@ def get_algo_keydata(config: GitConfigType) -> tuple[str, str]:
         raise ConfigurationError(
             f'Signing key must be a string, got {type(sk).__name__}'
         )
+    # Key on the signing key too, because library callers can sign with
+    # different keys for the same identity in one process
+    if (cached := IDENTITYCACHE.get((identity, sk))) is not None:
+        return cached
+
     if sk.startswith('ed25519:'):
         algo = 'ed25519'
         identifier = sk[8:]
@@ -1503,7 +1504,7 @@ def get_algo_keydata(config: GitConfigType) -> tuple[str, str]:
         logger.critical('E: Unknown key type: %s', sk)
         raise ConfigurationError(f'Unknown key type: {sk}')
 
-    IDENTITYCACHE[identity] = (algo, keydata)
+    IDENTITYCACHE[(identity, sk)] = (algo, keydata)
     return algo, keydata
 
 

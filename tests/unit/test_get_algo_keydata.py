@@ -138,18 +138,51 @@ class TestGetAlgoKeydataSSHSigningKey:
 
     @patch('patatt.get_config_from_git')
     def test_identitycache_hit_skips_lookup(self, mock_gcfg: MagicMock) -> None:
-        """When identity is already in IDENTITYCACHE, return cached result directly."""
-        IDENTITYCACHE['cached@example.com'] = ('openssh', '/cached/key')
+        """A cached identity and signing key pair is returned without a lookup.
+
+        The cached path does not exist on disk, so a real ed25519 lookup
+        would fail.
+        """
+        IDENTITYCACHE[('cached@example.com', 'ed25519:cached')] = (
+            'ed25519',
+            'cachedkeydata',
+        )
 
         mock_gcfg.side_effect = _make_mock_get_config(
             usercfg={'email': 'cached@example.com'},
             gpgcfg={},
         )
-        config: GitConfigType = {'identity': 'cached@example.com'}
+        config: GitConfigType = {
+            'identity': 'cached@example.com',
+            'signingkey': 'ed25519:cached',
+        }
         algo, keydata = get_algo_keydata(config)
 
-        assert algo == 'openssh'
-        assert keydata == '/cached/key'
+        assert algo == 'ed25519'
+        assert keydata == 'cachedkeydata'
+
+    @patch('patatt.get_config_from_git')
+    def test_identitycache_depends_on_signingkey(self, mock_gcfg: MagicMock) -> None:
+        """A different signing key for the same identity must not hit the cache.
+
+        Library callers such as b4 can sign several times in one process,
+        and each call can pass its own patatt.signingkey.
+        """
+        mock_gcfg.side_effect = _make_mock_get_config(
+            usercfg={'email': 'test@example.com'},
+            gpgcfg={},
+        )
+        first: GitConfigType = {
+            'identity': 'test@example.com',
+            'signingkey': 'openpgp:FIRSTKEY',
+        }
+        second: GitConfigType = {
+            'identity': 'test@example.com',
+            'signingkey': 'openssh:/second/key.pub',
+        }
+
+        assert get_algo_keydata(first) == ('openpgp', 'FIRSTKEY')
+        assert get_algo_keydata(second) == ('openssh', '/second/key.pub')
 
     @patch('patatt.gpg_run_command')
     @patch('patatt.get_config_from_git')
