@@ -18,6 +18,14 @@ Bug Fixes
   openpgp key found") instead of ``BADSIG`` whenever gpg failed for any
   reason other than a missing key, such as a corrupted ``b=`` value.
 
+- Fix OpenPGP signing failing on the first message when
+  ``user.signingkey`` is set to the same string as ``user.email``, which
+  is a common way to name a GPG key.
+
+- Fix library callers getting the wrong signing key when they sign more
+  than once in the same process with the same identity but a different
+  ``patatt.signingkey``.
+
 v0.8.0 (2026-07-22)
 -------------------
 
